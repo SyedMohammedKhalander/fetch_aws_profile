@@ -1,117 +1,127 @@
 import boto3
-import os
-from configparser import ConfigParser
+from datetime import datetime, timedelta
 import json
-from datetime import datetime
 
-def load_aws_credentials(filepath):
-    config = ConfigParser()
-    config.read(filepath)
-    return config
-
-def fetch_profile_details(config, profile_name):
-    return {
-        'aws_access_key_id': config.get(profile_name, 'aws_access_key_id'),
-        'aws_secret_access_key': config.get(profile_name, 'aws_secret_access_key')
-    }
-
-def fetch_aws_profile_details_from_local():
-    credentials_path = os.path.expanduser("~") + '/.aws/credentials'
-    config = load_aws_credentials(credentials_path)
-
-    profile_details = {}
-
-    for profile_name in config.sections():
-        profile_details[profile_name] = fetch_profile_details(config, profile_name)
-
-    config_path = os.path.expanduser("~") + '/.aws/config'
-    config = load_aws_credentials(config_path)
-
-    for profile_name in config.sections():
-        if profile_name != 'default' and not profile_name.startswith("profile"):
-            continue
-
-        profile_name_dic = profile_name.replace("profile ", "", 1) if profile_name.startswith("profile") else profile_name
-        profile_details[profile_name_dic] = {**profile_details.get(profile_name_dic, {}), 'region': config.get(profile_name, 'region', fallback=None),
-                                             'output': config.get(profile_name, 'output', fallback=None)}
-
-    return profile_details
-
-def get_profile_details_from_aws(profile_details):
-    session = boto3.Session(
-        aws_access_key_id=profile_details['aws_access_key_id'],
-        aws_secret_access_key=profile_details['aws_secret_access_key']
-    )
-    iam_client = session.client('iam')
-
-    try:
-        response = iam_client.get_user()
-        return response['User']['Arn'], response['User']['UserName'], response['User']['CreateDate'], response['User']['PasswordLastUsed']
-    except Exception as e:
-        return None, None, None, None
-
-def get_profile_details_from_config_files_in_local():
-    profiles = fetch_aws_profile_details_from_local()
-    output_file_path = "profile_details.json"
-    with open(output_file_path, "w") as output_file:
-        profile_data = []
-        for profile_name, profile_details in profiles.items():
-            data = {
-                "profile_name": profile_name,
-                "aws_access_key_id": profile_details['aws_access_key_id'],
-                # "aws_secret_access_key": profile_details['aws_secret_access_key'],
-                "region": profile_details['region'],
-                "output": profile_details['output']
-            }
-            Arn, username, created_date, password_last_used = get_profile_details_from_aws(profile_details)
-            valid = Arn is not None
-
-            data["valid_profile"] = valid
-            if valid:
-                data["arn"] = Arn
-                data["username"] = username
-                data["created_date"] = created_date.isoformat()  # Convert datetime to string
-                if password_last_used is not None:
-                    data["password_last_used"] = password_last_used.isoformat()  # Convert datetime to string
-
-            profile_data.append(data)
-
-        json.dump(profile_data, output_file, indent=4)
-        print("Data saved to", output_file_path)
+IAM_CLIENT = boto3.client('iam')
+CLOUDTRAIL_CLIENT = boto3.client('cloudtrail')
 
 
-def get_profile_details_from_key_and_secret(key, secret):
-    import boto3
+def fetch_cloudtrail_create_events(username, start_time, end_time):
+    filters = {'AttributeKey': 'ReadOnly', 'AttributeValue': "false"}
+    events = []
 
-    access_key = key
-    secret_key = secret
-
-    session = boto3.Session(
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key
+    response = CLOUDTRAIL_CLIENT.lookup_events(
+        LookupAttributes=[filters],
+        StartTime=start_time,
+        EndTime=end_time,
+        MaxResults=50
     )
 
+    while response.get('NextToken') and len(
+            events) < 2500:  # to get all events in last 7 days remove len(events) < 2500
+        # but inturn it will take long time to fetch all the events i have added this u can remove this and run
+        response = CLOUDTRAIL_CLIENT.lookup_events(
+            LookupAttributes=[filters],
+            StartTime=start_time,
+            EndTime=end_time,
+            MaxResults=50,
+            NextToken=response.get('NextToken')
+        )
+        events.extend(response.get('Events'))
+
+    create_events = [event for event in events if event_name_starts_with_create(event)]
+
+    creat_events_by_user = [event for event in create_events if event.get("Username") and event.get("Username") == username]
+
+    return creat_events_by_user
+
+def fetch_cloudtrail_access_events(username, start_time, end_time):
+    filters = {'AttributeKey': 'ReadOnly', 'AttributeValue': "true"}
+    events = []
+
+    response = CLOUDTRAIL_CLIENT.lookup_events(
+        LookupAttributes=[filters],
+        StartTime=start_time,
+        EndTime=end_time,
+        MaxResults=50
+    )
+
+    while response.get('NextToken') and len(
+            events) < 2500:  # to get all events in last 7 days remove len(events) < 2500
+        # but inturn it will take long time to fetch all the events i have added this u can remove this and run
+        response = CLOUDTRAIL_CLIENT.lookup_events(
+            LookupAttributes=[filters],
+            StartTime=start_time,
+            EndTime=end_time,
+            MaxResults=50,
+            NextToken=response.get('NextToken')
+        )
+        events.extend(response.get('Events'))
+
+    # create_events = [event for event in events if event_name_starts_with_create(event)]
+
+    access_events_by_user = [event for event in events if event.get("Username") and event.get("Username") == username]
+
+    return access_events_by_user
+
+
+def event_name_starts_with_create(event):
+    event_name = event.get('EventName', '')
+    return 'Create' in event_name or event_name.startswith('Run')
+
+
+def format_event_time(event):
+    event['EventTime'] = event['EventTime'].isoformat()
+
+
+def cleanup_event_data(event):
+    keys_to_remove = ['ReadOnly', 'Resources', 'CloudTrailEvent', 'AccessKeyId']
+    for key in keys_to_remove:
+        if key in event:
+            del event[key]
+
+
+def fetch_and_store_aws_profile_details():
+    session = boto3.Session()
     iam_client = session.client('iam')
-    file_path = "user_data.json"
     response = iam_client.get_user()
-    data = {
-        "aws_access_key_id": response['User']['UserId'],
-        "arn": response['User']['Arn'],
-        "username": response['User']['UserName'],
-        "created_date": response['User']['CreateDate'].isoformat(),  # Convert datetime to string
-        "password_last_used": response['User']['PasswordLastUsed'].isoformat()  # Convert datetime to string
+    create_date = response['User']['CreateDate']
+    arn = response['User']['Arn']
+    username = response['User']['UserName']
+    access_key = response['User']['UserId']
+    last_login = response['User']['PasswordLastUsed']
+
+    today = datetime.utcnow()
+    seven_days_ago = today - timedelta(days=7)
+    start_time = seven_days_ago.strftime('%Y-%m-%dT%H:%M:%SZ')
+    end_time = today.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    cloudtrail_create_events = fetch_cloudtrail_create_events(username, start_time, end_time)
+    cloudtrail_access_events = fetch_cloudtrail_access_events(username, start_time, end_time)
+    for event in cloudtrail_create_events:
+        format_event_time(event)
+        cleanup_event_data(event)
+    for event in cloudtrail_access_events:
+        format_event_time(event)
+        cleanup_event_data(event)
+
+    data_to_store = {
+        "created_date": create_date.isoformat(),
+        "arn": arn,
+        "user_name": username,
+        "access_key": access_key,
+        "last_login": last_login.isoformat(),
+        "created_components": cloudtrail_create_events,
+        "component_accessed": cloudtrail_access_events
     }
-    with open(file_path, "w") as json_file:
-        json.dump(data, json_file, indent=4)
 
-    print("Data saved to", file_path)
+    json_data = json.dumps(data_to_store, indent=4)
+
+    with open("user_data.json", "w") as json_file:
+        json_file.write(json_data)
+
+    print("User data stored in 'user_data.json'")
 
 
-def main(key=None, secret=None):
-    if key == None or secret == None:
-        get_profile_details_from_config_files_in_local()
-    else:
-        get_profile_details_from_key_and_secret(key, secret)
-
-if __name__ == '__main__':
-    main(key=None, secret=None)
+if __name__ == "__main__":
+    fetch_and_store_aws_profile_details()
