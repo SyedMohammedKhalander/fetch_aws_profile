@@ -1,0 +1,52 @@
+{
+    "vpcEndpoints": {
+        "ap-south-1": [],
+        "eu-north-1": [],
+        "eu-west-3": [],
+        "eu-west-2": [],
+        "eu-west-1": [],
+        "ap-northeast-3": [],
+        "ap-northeast-2": [],
+        "ap-northeast-1": [],
+        "ca-central-1": [],
+        "sa-east-1": [],
+        "ap-southeast-1": [],
+        "ap-southeast-2": [],
+        "eu-central-1": [],
+        "us-east-1": [
+            {
+                "VpcEndpointId": "vpce-099074c454cf80d2d",
+                "VpcEndpointType": "Gateway",
+                "VpcId": "vpc-0687a5f82313ff296",
+                "ServiceName": "com.amazonaws.us-east-1.s3",
+                "State": "available",
+                "PolicyDocument": "{\"Version\":\"2008-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"*\",\"Resource\":\"*\"}]}",
+                "RouteTableIds": [
+                    "rtb-04e2235043042c3e9",
+                    "rtb-0cb7c3b526a8a51ad"
+                ],
+                "SubnetIds": [],
+                "Groups": [],
+                "PrivateDnsEnabled": false,
+                "RequesterManaged": false,
+                "NetworkInterfaceIds": [],
+                "DnsEntries": [],
+                "CreationTimestamp": "2023-07-28T14:13:04+00:00",
+                "Tags": [
+                    {
+                        "Key": "name",
+                        "Value": "skure_vpc"
+                    },
+                    {
+                        "Key": "Name",
+                        "Value": "skure2ndvpc-vpce-s3"
+                    }
+                ],
+                "OwnerId": "906113748440"
+            }
+        ],
+        "us-east-2": [],
+        "us-west-1": [],
+        "us-west-2": []
+    }
+}
